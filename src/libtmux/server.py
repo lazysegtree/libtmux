@@ -115,21 +115,23 @@ class Server(EnvironmentMixin):
         EnvironmentMixin.__init__(self, "-g")
         self._windows: list[WindowDict] = []
         self._panes: list[PaneDict] = []
+        
+        self.def_socket_name = "default"
+
+        tmux_tmpdir = pathlib.Path(os.getenv("TMUX_TMPDIR", "/tmp"))
+        self.def_socket_path = str(tmux_tmpdir / f"tmux-{os.geteuid()}" / self.def_socket_name)
 
         if socket_path is not None:
             self.socket_path = socket_path
+            self.socket_name = pathlib.Path(socket_path).name
         elif socket_name is not None:
+            # new socket in same parent path
+            # wait, is path a dir or a file ?
+            self.socket_path = str(pathlib.Path(self.def_socket_path).parent / socket_name )
             self.socket_name = socket_name
-
-        tmux_tmpdir = pathlib.Path(os.getenv("TMUX_TMPDIR", "/tmp"))
-        socket_name = self.socket_name or "default"
-        if (
-            tmux_tmpdir is not None
-            and self.socket_path is None
-            and self.socket_name is None
-            and socket_name != "default"
-        ):
-            self.socket_path = str(tmux_tmpdir / f"tmux-{os.geteuid()}" / socket_name)
+        else:
+            self.socket_name = self.def_socket_name
+            self.socket_path = self.def_socket_path
 
         if config_file:
             self.config_file = config_file
@@ -148,6 +150,16 @@ class Server(EnvironmentMixin):
         except Exception:
             return False
         return res.returncode == 0
+    
+    def add_srv_opts(self, args: list[str]) -> None:
+        if self.socket_path != self.def_socket_path:
+            args.insert(0, f"-S{self.socket_path}")
+        # if a diff socket path has been provided, we dont need... a diff socket name ?
+        if self.socket_name != self.def_socket_name:
+            args.insert(0, f"-L{self.socket_name}")
+        
+        if self.config_file:
+            args.insert(0, f"-f{self.config_file}")
 
     def raise_if_dead(self) -> None:
         """Raise if server not connected.
@@ -164,12 +176,7 @@ class Server(EnvironmentMixin):
             raise exc.TmuxCommandNotFound
 
         cmd_args: list[str] = ["list-sessions"]
-        if self.socket_name:
-            cmd_args.insert(0, f"-L{self.socket_name}")
-        if self.socket_path:
-            cmd_args.insert(0, f"-S{self.socket_path}")
-        if self.config_file:
-            cmd_args.insert(0, f"-f{self.config_file}")
+        self.add_srv_opts(cmd_args)
 
         subprocess.check_call([tmux_bin, *cmd_args])
 
@@ -231,12 +238,7 @@ class Server(EnvironmentMixin):
         """
         svr_args: list[str | int] = [cmd]
         cmd_args: list[str | int] = []
-        if self.socket_name:
-            svr_args.insert(0, f"-L{self.socket_name}")
-        if self.socket_path:
-            svr_args.insert(0, f"-S{self.socket_path}")
-        if self.config_file:
-            svr_args.insert(0, f"-f{self.config_file}")
+        self.add_srv_opts(svr_args)
         if self.colors:
             if self.colors == 256:
                 svr_args.insert(0, "-2")
@@ -608,14 +610,8 @@ class Server(EnvironmentMixin):
 
     def __repr__(self) -> str:
         """Representation of :class:`Server` object."""
-        if self.socket_name is not None:
-            return (
-                f"{self.__class__.__name__}"
-                f"(socket_name={getattr(self, 'socket_name', 'default')})"
-            )
-        if self.socket_path is not None:
-            return f"{self.__class__.__name__}(socket_path={self.socket_path})"
-        return f"{self.__class__.__name__}(socket_path=/tmp/tmux-1000/default)"
+        return f"{self.__class__.__name__(socket_path={self.socket_path}, socket_name={self.socket_name})}"
+
 
     #
     # Legacy: Redundant stuff we want to remove
